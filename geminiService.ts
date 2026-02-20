@@ -1,6 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { UserPreferences, Recommendation, Recipe, Category } from "./types";
+import { UserPreferences, Recommendation, Recipe, Category, Restaurant } from "./types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -34,6 +34,53 @@ export const selectRecipeFromPool = async (prefs: UserPreferences, pool: Recomme
         type: Type.OBJECT,
         properties: {
           selectedId: { type: Type.STRING, description: "The id of the selected recipe." },
+          reason: { type: Type.STRING, description: "Why this fits the user's preferences in Chinese." }
+        },
+        required: ["selectedId", "reason"]
+      }
+    }
+  });
+
+  return JSON.parse(response.text);
+};
+
+/**
+ * 让 AI 从用户的“餐馆列表”中根据当前偏好挑选最合适的一家店。
+ */
+export const selectRestaurantFromPool = async (prefs: UserPreferences, pool: Restaurant[]): Promise<{ selectedId: string; reason: string }> => {
+  const poolData = pool.map(r => ({ 
+    id: r.id, 
+    name: r.name, 
+    cuisine: r.cuisine, 
+    location: r.location, 
+    avgPrice: r.avgPrice,
+    status: r.status,
+    overallRating: r.overallRating,
+    notes: r.notes
+  }));
+  
+  const prompt = `你是一个美食向导。请从以下用户的餐馆列表中，根据用户当下的偏好，挑选出最合适的一家店。
+  
+  用户偏好：
+  心情: ${prefs.mood}
+  预算: ${prefs.budget} (严格标准：省钱简餐指人均<50, 适中消费指人均100-200, 犒劳一下指人均>200)
+  地点: ${prefs.location}
+  忌口/要求: ${prefs.restrictions || '无'}
+
+  餐馆列表：
+  ${JSON.stringify(poolData)}
+
+  请只返回被选中餐馆的 id 字符串。`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          selectedId: { type: Type.STRING, description: "The id of the selected restaurant." },
           reason: { type: Type.STRING, description: "Why this fits the user's preferences in Chinese." }
         },
         required: ["selectedId", "reason"]

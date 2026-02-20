@@ -55,6 +55,7 @@ export interface UserPreferences {
   time: TimePreference;
   ingredient: IngredientPreference | string;
   restrictions: string;
+  location: string; // '在家' or specific location
 }
 
 export interface Recipe {
@@ -79,7 +80,33 @@ export interface Recommendation {
   difficulty?: '简单' | '中等' | '困难';
 }
 
-export type TabType = 'recommend' | 'menu';
+export interface DishRating {
+  name: string;
+  rating: number;
+  comment?: string;
+  imageUrl?: string;
+}
+
+export interface DishToTry {
+  name: string;
+  imageUrl?: string;
+}
+
+export interface Restaurant {
+  id: string;
+  name: string;
+  cuisine: string;
+  location: string;
+  avgPrice: number;
+  status: 'want_to_go' | 'visited';
+  overallRating?: number;
+  dishRatings?: DishRating[];
+  dishesToTry?: DishToTry[];
+  notes?: string;
+  imageUrl?: string;
+}
+
+export type TabType = 'recommend' | 'menu' | 'restaurants';
 
 export interface AppState {
   step: 'start' | 'questions' | 'loading' | 'result' | 'upload_loading';
@@ -88,6 +115,7 @@ export interface AppState {
   recommendation: Recommendation | null;
   history: Recommendation[];
   savedRecipes: Recommendation[];
+  restaurants: Restaurant[];
   isRecipeModalOpen: boolean;
   isFetchingRecipe: boolean;
   isShareModalOpen: boolean;

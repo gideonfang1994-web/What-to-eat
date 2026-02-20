@@ -27,10 +27,13 @@ import {
   Compass,
   LayoutGrid,
   Bell,
-  ChevronDown
+  ChevronDown,
+  MapPin,
+  Star,
+  MessageSquare
 } from 'lucide-react';
-import { AppState, UserPreferences, Recommendation, Mood, Budget, Cuisine, TabType, Category, TimePreference, IngredientPreference } from './types';
-import { getFoodRecommendation, generateFoodImage, getDetailedRecipe, analyzeDishImage, selectRecipeFromPool } from './geminiService';
+import { AppState, UserPreferences, Recommendation, Mood, Budget, Cuisine, TabType, Category, TimePreference, IngredientPreference, Restaurant, DishRating } from './types';
+import { getFoodRecommendation, generateFoodImage, getDetailedRecipe, analyzeDishImage, selectRecipeFromPool, selectRestaurantFromPool } from './geminiService';
 import { motion, AnimatePresence } from 'framer-motion';
 import { io, Socket } from 'socket.io-client';
 import { QRCodeCanvas } from 'qrcode.react';
@@ -169,17 +172,21 @@ const App: React.FC = () => {
       cuisine: Cuisine.ANY,
       time: TimePreference.ANY,
       ingredient: IngredientPreference.ANY,
-      restrictions: ''
+      restrictions: '',
+      location: '在家'
     },
     recommendation: null,
     history: [],
     savedRecipes: [],
+    restaurants: [],
     isRecipeModalOpen: false,
     isFetchingRecipe: false,
     isShareModalOpen: false
   });
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isRestaurantModalOpen, setIsRestaurantModalOpen] = useState(false);
+  const [editingRestaurant, setEditingRestaurant] = useState<Partial<Restaurant> | null>(null);
   const [manualRecipeImage, setManualRecipeImage] = useState<string | null>(null);
   const [isFullMenuShareModalOpen, setIsFullMenuShareModalOpen] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
@@ -200,24 +207,29 @@ const App: React.FC = () => {
     });
   };
 
+  const uniqueLocations = Array.from(new Set(['在家', ...state.restaurants.map(r => r.location).filter(Boolean)]));
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const guestChefId = params.get('chefId');
     if (guestChefId && guestChefId !== chefId) {
       setIsGuest(true);
       setTargetChefId(guestChefId);
-      // Fetch the chef's menu
+      // Fetch the chef's menu and restaurants
       fetch(`/api/menu/${guestChefId}`)
         .then(res => {
-          if (!res.ok) throw new Error('Menu not found');
+          if (!res.ok) throw new Error('Data not found');
           return res.json();
         })
         .then(data => {
-          if (data.savedRecipes) {
-            setState(prev => ({ ...prev, savedRecipes: data.savedRecipes, activeTab: 'menu' }));
-          }
+          setState(prev => ({ 
+            ...prev, 
+            savedRecipes: data.savedRecipes || prev.savedRecipes, 
+            restaurants: data.restaurants || prev.restaurants,
+            activeTab: 'menu' 
+          }));
         })
-        .catch(err => console.error('Error fetching menu:', err));
+        .catch(err => console.error('Error fetching data:', err));
     }
 
     // Socket setup
@@ -252,14 +264,17 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!isGuest) {
-      // Save menu to server whenever it changes so guests can see it
+      // Save data to server whenever it changes so guests can see it
       fetch(`/api/menu/${chefId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ savedRecipes: state.savedRecipes })
-      }).catch(err => console.error('Error saving menu:', err));
+        body: JSON.stringify({ 
+          savedRecipes: state.savedRecipes,
+          restaurants: state.restaurants
+        })
+      }).catch(err => console.error('Error saving data:', err));
     }
-  }, [state.savedRecipes, chefId, isGuest]);
+  }, [state.savedRecipes, state.restaurants, chefId, isGuest]);
   const [newRecipe, setNewRecipe] = useState<Partial<Recommendation>>({
     name: '',
     category: Category.MEAT,
@@ -275,34 +290,47 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    const saved = localStorage.getItem('foodie_saved_recipes');
-    if (saved) {
+    const savedRecipes = localStorage.getItem('foodie_saved_recipes');
+    const savedRestaurants = localStorage.getItem('foodie_restaurants');
+    
+    let parsedRecipes: Recommendation[] = [];
+    let parsedRestaurants: Restaurant[] = [];
+
+    if (savedRecipes) {
       try {
-        const parsed = JSON.parse(saved);
-        if (parsed.length > 0) {
-          setState(prev => ({ ...prev, savedRecipes: parsed }));
-          return;
-        }
+        parsedRecipes = JSON.parse(savedRecipes);
       } catch (e) {
         console.error("Failed to load saved recipes");
       }
     }
-    // Default samples if nothing in storage
-    setState(prev => ({ ...prev, savedRecipes: SAMPLE_RECIPES }));
+
+    if (savedRestaurants) {
+      try {
+        parsedRestaurants = JSON.parse(savedRestaurants);
+      } catch (e) {
+        console.error("Failed to load saved restaurants");
+      }
+    }
+
+    setState(prev => ({ 
+      ...prev, 
+      savedRecipes: parsedRecipes.length > 0 ? parsedRecipes : SAMPLE_RECIPES, 
+      restaurants: parsedRestaurants 
+    }));
   }, []);
 
   useEffect(() => {
     localStorage.setItem('foodie_saved_recipes', JSON.stringify(state.savedRecipes));
-  }, [state.savedRecipes]);
+    localStorage.setItem('foodie_restaurants', JSON.stringify(state.restaurants));
+  }, [state.savedRecipes, state.restaurants]);
 
   const [loadingText, setLoadingText] = useState('正在同步您的味蕾偏好...');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const shareRef = useRef<HTMLDivElement>(null);
 
   const handleStartMatch = () => {
-    if (state.savedRecipes.length === 0) {
-      alert("您的私人菜单还是空的，请在‘我的菜单’中上传您的拿手好菜制作成菜谱！");
-      setState(prev => ({ ...prev, activeTab: 'menu' }));
+    if (state.savedRecipes.length === 0 && state.restaurants.length === 0) {
+      alert("您的私人菜单和餐馆列表都是空的，请先添加内容！");
       return;
     }
     setState(prev => ({ ...prev, step: 'questions' }));
@@ -315,11 +343,14 @@ const App: React.FC = () => {
     }));
   };
 
-  const handleSubmit = async () => {
-    if (state.savedRecipes.length === 0) return;
-
+  const handleSearchMenu = async () => {
+    if (state.savedRecipes.length === 0) {
+      alert("您的私人菜单还是空的！");
+      return;
+    }
     setState(prev => ({ ...prev, step: 'loading' }));
-    const messages = ['正在查阅您的私人菜单...', '评估哪道菜最适合当下的你...', '对比营养与口味...', '准备呈上佳肴...'];
+    setLoadingText('正在查阅您的私人菜单...');
+    const messages = ['评估哪道菜最适合当下的你...', '对比营养与口味...', '准备呈上佳肴...'];
     let msgIndex = 0;
     const interval = setInterval(() => {
       msgIndex = (msgIndex + 1) % messages.length;
@@ -329,9 +360,7 @@ const App: React.FC = () => {
     try {
       const { selectedId, reason } = await selectRecipeFromPool(state.preferences, state.savedRecipes);
       const selected = state.savedRecipes.find(r => r.id === selectedId) || state.savedRecipes[0];
-      
       const recWithReason = { ...selected, reason: reason || "这是您菜单中最符合当前心情的选择" };
-
       setState(prev => ({
         ...prev,
         step: 'result',
@@ -339,8 +368,52 @@ const App: React.FC = () => {
         history: [recWithReason, ...prev.history].slice(0, 10)
       }));
     } catch (error) {
-      const random = state.savedRecipes[Math.floor(Math.random() * state.savedRecipes.length)];
-      setState(prev => ({ ...prev, step: 'result', recommendation: random }));
+      console.error(error);
+      alert('匹配失败，请稍后再试');
+      setState(prev => ({ ...prev, step: 'start' }));
+    } finally {
+      clearInterval(interval);
+    }
+  };
+
+  const handleSearchRestaurant = async () => {
+    const locationPool = state.restaurants.filter(r => r.location === state.preferences.location);
+    if (locationPool.length === 0) {
+      alert(`您在 ${state.preferences.location} 还没有添加过餐馆！`);
+      return;
+    }
+    setState(prev => ({ ...prev, step: 'loading' }));
+    setLoadingText('正在搜索附近的宝藏店铺...');
+    const messages = ['对比评分与口碑...', '为您挑选最合适的餐厅...', '准备出发...'];
+    let msgIndex = 0;
+    const interval = setInterval(() => {
+      msgIndex = (msgIndex + 1) % messages.length;
+      setLoadingText(messages[msgIndex]);
+    }, 1500);
+
+    try {
+      const { selectedId, reason } = await selectRestaurantFromPool(state.preferences, locationPool);
+      const random = state.restaurants.find(r => r.id === selectedId) || locationPool[0];
+      const rec = {
+        id: random.id,
+        name: random.name,
+        description: random.notes || `一家主打${random.cuisine}的餐厅。`,
+        reason: reason || '根据您的口味，今天去这家餐厅坐坐吧！',
+        tags: [random.cuisine, random.status === 'visited' ? '去过' : '想去'],
+        calories: '--',
+        funFact: '去探索新的美味也是一种修行。',
+        imageUrl: random.imageUrl || `https://picsum.photos/seed/${random.name}/800/600`
+      };
+      setState(prev => ({ 
+        ...prev, 
+        step: 'result', 
+        recommendation: rec,
+        history: [rec, ...prev.history].slice(0, 10)
+      }));
+    } catch (error) {
+      console.error(error);
+      alert('匹配失败，请稍后再试');
+      setState(prev => ({ ...prev, step: 'start' }));
     } finally {
       clearInterval(interval);
     }
@@ -384,8 +457,17 @@ const App: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleShowRecipe = async () => {
+  const handleShowDetails = async () => {
     if (!state.recommendation) return;
+    
+    // Check if it's a restaurant
+    const restaurant = state.restaurants.find(r => r.id === state.recommendation?.id);
+    if (restaurant) {
+      setEditingRestaurant(restaurant);
+      setIsRestaurantModalOpen(true);
+      return;
+    }
+
     if (state.recommendation.recipe) {
       setState(prev => ({ ...prev, isRecipeModalOpen: true }));
       return;
@@ -557,6 +639,24 @@ const App: React.FC = () => {
 
                   <div className="space-y-6 relative z-10">
                     <div className="flex items-center gap-2">
+                      <MapPin className="w-3 h-3 text-orange-500" />
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">你在哪里？</label>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {uniqueLocations.map(loc => (
+                        <button 
+                          key={loc} 
+                          onClick={() => updatePreference('location', loc)} 
+                          className={`px-4 py-2.5 rounded-xl border-2 transition-all text-[10px] font-black uppercase tracking-widest ${state.preferences.location === loc ? 'border-orange-500 bg-orange-500 text-white shadow-lg scale-105' : 'border-gray-50 bg-gray-50/50 text-gray-500 hover:border-orange-200'}`}
+                        >
+                          {loc}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-6 relative z-10">
+                    <div className="flex items-center gap-2">
                       <Heart className="w-3 h-3 text-rose-500" />
                       <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">心情关键词</label>
                     </div>
@@ -636,19 +736,57 @@ const App: React.FC = () => {
                     </div>
                   </div>
 
-                  <div className="flex gap-3 relative z-10">
-                    <button onClick={handleSubmit} className="flex-1 bg-gray-900 text-white py-5 rounded-[2rem] font-black text-base shadow-2xl shadow-gray-200 active:scale-95 hover:bg-orange-600 transition-all flex items-center justify-center gap-2">
-                      在收藏夹中搜寻美味 <Zap className="w-4 h-4 fill-current text-yellow-400" />
-                    </button>
-                    <button 
-                      onClick={() => {
-                        const random = state.savedRecipes[Math.floor(Math.random() * state.savedRecipes.length)];
-                        setState(prev => ({ ...prev, step: 'result', recommendation: { ...random, reason: '随机推荐，给生活一点惊喜！' } }));
-                      }} 
-                      className="bg-orange-50 text-orange-600 px-6 py-5 rounded-[2rem] font-black text-base shadow-sm active:scale-95 hover:bg-orange-100 transition-all flex items-center justify-center"
-                    >
-                      随机推荐
-                    </button>
+                  <div className="flex flex-col gap-4 relative z-10">
+                    <div className="grid grid-cols-2 gap-3">
+                      <button onClick={handleSearchMenu} className="bg-gray-900 text-white py-5 rounded-[2rem] font-black text-sm shadow-xl shadow-gray-200 active:scale-95 hover:bg-orange-600 transition-all flex items-center justify-center gap-2">
+                        菜单搜寻 <Search className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => {
+                          if (state.savedRecipes.length === 0) {
+                            alert('您的菜单还是空的！');
+                            return;
+                          }
+                          const random = state.savedRecipes[Math.floor(Math.random() * state.savedRecipes.length)];
+                          setState(prev => ({ ...prev, step: 'result', recommendation: { ...random, reason: '随机推荐，给生活一点惊喜！' } }));
+                        }} 
+                        className="bg-orange-50 text-orange-600 py-5 rounded-[2rem] font-black text-sm shadow-sm active:scale-95 hover:bg-orange-100 transition-all flex items-center justify-center gap-2"
+                      >
+                        随机菜单 <RefreshCcw className="w-4 h-4" />
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <button onClick={handleSearchRestaurant} className="bg-stone-800 text-white py-5 rounded-[2rem] font-black text-sm shadow-xl shadow-stone-200 active:scale-95 hover:bg-rose-600 transition-all flex items-center justify-center gap-2">
+                        餐馆搜寻 <MapPin className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => {
+                          if (state.restaurants.length === 0) {
+                            alert('您的餐馆列表还是空的！');
+                            return;
+                          }
+                          const random = state.restaurants[Math.floor(Math.random() * state.restaurants.length)];
+                          setState(prev => ({ 
+                            ...prev, 
+                            step: 'result', 
+                            recommendation: {
+                              id: random.id,
+                              name: random.name,
+                              description: random.notes || `一家主打${random.cuisine}的餐厅。`,
+                              reason: '随机推荐一家餐厅，换个心情！',
+                              tags: [random.cuisine, random.status === 'visited' ? '去过' : '想去'],
+                              calories: '--',
+                              funFact: '去探索新的美味也是一种修行。',
+                              imageUrl: random.imageUrl || `https://picsum.photos/seed/${random.name}/800/600`
+                            } 
+                          }));
+                        }} 
+                        className="bg-rose-50 text-rose-600 py-5 rounded-[2rem] font-black text-sm shadow-sm active:scale-95 hover:bg-rose-100 transition-all flex items-center justify-center gap-2"
+                      >
+                        随机餐馆 <RefreshCcw className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -707,9 +845,15 @@ const App: React.FC = () => {
                       </div>
 
                       <div className="flex gap-3">
-                        <button onClick={handleShowRecipe} className="flex-1 bg-gray-900 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-orange-600 transition-all active:scale-95 shadow-xl">
-                          <BookOpen className="w-5 h-5" /> 查看菜谱
-                        </button>
+                        {state.restaurants.some(r => r.id === state.recommendation?.id) ? (
+                          <button onClick={handleShowDetails} className="flex-1 bg-gray-900 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-orange-600 transition-all active:scale-95 shadow-xl">
+                            <Utensils className="w-5 h-5" /> 查看菜单
+                          </button>
+                        ) : (
+                          <button onClick={handleShowDetails} className="flex-1 bg-gray-900 text-white py-4 rounded-2xl font-black flex items-center justify-center gap-2 hover:bg-orange-600 transition-all active:scale-95 shadow-xl">
+                            <BookOpen className="w-5 h-5" /> 查看菜谱
+                          </button>
+                        )}
                         <button onClick={() => setState(prev => ({...prev, isShareModalOpen: true}))} className="bg-white border border-gray-100 p-4 rounded-2xl text-gray-900 hover:border-orange-200 hover:text-orange-500 transition-all shadow-sm">
                           <Share2 className="w-5 h-5" />
                         </button>
@@ -965,6 +1109,169 @@ const App: React.FC = () => {
               </div>
             </motion.div>
           )}
+          {/* RESTAURANTS TAB VIEW */}
+          {state.activeTab === 'restaurants' && (
+            <motion.div key="restaurants-view" className="flex-1 flex flex-col" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-orange-100 flex-1 flex flex-col">
+                {/* Header */}
+                <div className="pt-8 pb-6 px-6 text-center border-b border-orange-100/50 bg-gradient-to-b from-orange-50/80 to-white/90 backdrop-blur-md relative z-10">
+                  <h2 className="font-serif-menu text-3xl font-bold text-stone-800 mb-2 tracking-tight">Restaurant Guide</h2>
+                  <p className="text-orange-600 text-[9px] font-black uppercase tracking-[0.3em]">我的美食足迹</p>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 overflow-y-auto p-4 md:p-6 no-scrollbar bg-gradient-to-br from-stone-50 via-white to-orange-50/20 relative">
+                  <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_50%,rgba(255,165,0,0.05),transparent_70%)] pointer-events-none"></div>
+                  <div className="absolute top-0 left-0 w-64 h-64 bg-orange-200/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
+                  <div className="absolute bottom-0 right-0 w-96 h-96 bg-rose-200/10 rounded-full blur-3xl translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
+                  
+                  <div className="relative z-10 space-y-6">
+                    {/* Stats */}
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-white/60 backdrop-blur-sm p-4 rounded-2xl border border-orange-100/50 flex flex-col items-center justify-center text-center shadow-sm">
+                        <span className="text-[9px] font-black text-stone-400 uppercase tracking-widest mb-0.5">想去</span>
+                        <span className="text-xl font-black text-stone-800">{state.restaurants.filter(r => r.status === 'want_to_go').length}</span>
+                      </div>
+                      <div className="bg-white/60 backdrop-blur-sm p-4 rounded-2xl border border-orange-100/50 flex flex-col items-center justify-center text-center shadow-sm">
+                        <span className="text-[9px] font-black text-stone-400 uppercase tracking-widest mb-0.5">去过</span>
+                        <span className="text-xl font-black text-orange-500">{state.restaurants.filter(r => r.status === 'visited').length}</span>
+                      </div>
+                    </div>
+
+                    {state.restaurants.length === 0 ? (
+                      <div className="py-20 text-center space-y-4">
+                        <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mx-auto">
+                          <MapPin className="w-8 h-8 text-orange-200" />
+                        </div>
+                        <p className="text-stone-300 font-serif-menu italic">还没有记录任何餐厅...</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-4">
+                        {state.restaurants.map((res, i) => (
+                          <motion.div 
+                            key={res.id}
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: i * 0.05 }}
+                            className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-orange-100/50 shadow-sm hover:shadow-md transition-all group relative overflow-hidden"
+                          >
+                            <div className="flex gap-4">
+                              <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+                                <img src={res.imageUrl || `https://picsum.photos/seed/${res.name}/200/200`} className="w-full h-full object-cover" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <h4 className="font-serif-menu text-lg font-bold text-stone-800 truncate">{res.name}</h4>
+                                    <div className="flex items-center gap-2">
+                                      <p className="text-[9px] font-black text-stone-400 uppercase tracking-widest">{res.cuisine}</p>
+                                      <span className="text-[8px] text-stone-300">•</span>
+                                      <p className="text-[9px] font-black text-orange-400 uppercase tracking-widest">{res.location}</p>
+                                      <span className="text-[8px] text-stone-300">•</span>
+                                      <p className="text-[9px] font-black text-stone-500 uppercase tracking-widest">¥{res.avgPrice}/人</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex gap-1">
+                                    <button 
+                                      onClick={() => {
+                                        setEditingRestaurant(res);
+                                        setIsRestaurantModalOpen(true);
+                                      }}
+                                      className="p-1.5 text-stone-300 hover:text-orange-500 transition-colors"
+                                    >
+                                      <Plus className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button 
+                                      onClick={() => setState(prev => ({ ...prev, restaurants: prev.restaurants.filter(r => r.id !== res.id) }))}
+                                      className="p-1.5 text-stone-300 hover:text-rose-500 transition-colors"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {res.status === 'visited' && (
+                                  <div className="mt-3 space-y-3">
+                                    <div className="flex items-center gap-1">
+                                      {[...Array(5)].map((_, i) => (
+                                        <Star key={i} className={`w-3 h-3 ${i < (res.overallRating || 0) ? 'text-yellow-400 fill-current' : 'text-stone-200'}`} />
+                                      ))}
+                                      <span className="text-[10px] font-black text-stone-400 ml-1">{res.overallRating}/5</span>
+                                    </div>
+                                    {res.dishRatings && res.dishRatings.length > 0 && (
+                                      <div className="space-y-2">
+                                        {res.dishRatings.map((dish, di) => (
+                                          <div key={di} className="bg-orange-50/50 p-2 rounded-xl border border-orange-100/30 flex gap-2 items-start">
+                                            {dish.imageUrl && (
+                                              <img src={dish.imageUrl} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
+                                            )}
+                                            <div className="flex-1 min-w-0">
+                                              <div className="flex justify-between items-center">
+                                                <span className="text-[10px] font-bold text-stone-800">{dish.name}</span>
+                                                <div className="flex gap-0.5">
+                                                  {[...Array(5)].map((_, si) => (
+                                                    <Star key={si} className={`w-2 h-2 ${si < dish.rating ? 'text-yellow-400 fill-current' : 'text-stone-200'}`} />
+                                                  ))}
+                                                </div>
+                                              </div>
+                                              {dish.comment && (
+                                                <p className="text-[9px] text-stone-500 italic line-clamp-1">{dish.comment}</p>
+                                              )}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {res.status === 'want_to_go' && (
+                                  <div className="mt-3 space-y-2">
+                                    <span className="bg-stone-100 text-stone-500 text-[8px] font-black uppercase px-2 py-0.5 rounded-full tracking-widest">想去清单</span>
+                                    {res.dishesToTry && res.dishesToTry.length > 0 && (
+                                      <div className="flex flex-wrap gap-2">
+                                        {res.dishesToTry.map((dish, di) => (
+                                          <div key={di} className="flex items-center gap-1.5 bg-orange-50 px-2 py-1 rounded-lg border border-orange-100/50">
+                                            {dish.imageUrl && <img src={dish.imageUrl} className="w-4 h-4 rounded-sm object-cover" />}
+                                            <span className="text-[9px] font-bold text-orange-600">想吃: {dish.name}</span>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </motion.div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Footer */}
+                <div className="p-4 bg-white/90 backdrop-blur-md border-t border-orange-100/50 flex gap-3 relative z-20">
+                  <button 
+                    onClick={() => {
+                      setEditingRestaurant({ status: 'want_to_go', cuisine: '中餐', location: '南昌', avgPrice: 50, dishesToTry: [] });
+                      setIsRestaurantModalOpen(true);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-orange-50 border border-orange-200 text-orange-600 px-3 py-2.5 rounded-xl font-black text-[11px] shadow-sm hover:bg-orange-100 transition-all active:scale-95"
+                  >
+                    <Bookmark className="w-3.5 h-3.5" /> 标记想去
+                  </button>
+                  <button 
+                    onClick={() => {
+                      setEditingRestaurant({ status: 'visited', cuisine: '中餐', location: '南昌', avgPrice: 100, overallRating: 5, dishRatings: [] });
+                      setIsRestaurantModalOpen(true);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-1.5 bg-stone-800 text-white px-3 py-2.5 rounded-xl font-black text-[11px] shadow-md hover:bg-orange-500 transition-all active:scale-95"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" /> 记录吃过
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
@@ -988,11 +1295,331 @@ const App: React.FC = () => {
             <LayoutGrid className="w-5 h-5" />
             {state.activeTab === 'menu' && <span className="text-[10px] font-black uppercase tracking-widest">菜单</span>}
           </button>
+          <button 
+            onClick={() => setActiveTab('restaurants')}
+            className={`flex items-center justify-center gap-2 flex-1 py-3.5 transition-all rounded-full ${state.activeTab === 'restaurants' ? 'bg-orange-500 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+          >
+            <MapPin className="w-5 h-5" />
+            {state.activeTab === 'restaurants' && <span className="text-[10px] font-black uppercase tracking-widest">餐馆</span>}
+          </button>
         </div>
       </nav>
 
       {/* Shared Modals */}
       <AnimatePresence>
+        {/* Restaurant Add/Edit Modal */}
+        {isRestaurantModalOpen && editingRestaurant && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setIsRestaurantModalOpen(false)} className="absolute inset-0 bg-black/80 backdrop-blur-md" />
+            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="relative bg-white w-full max-w-lg max-h-[90vh] rounded-[3rem] overflow-hidden flex flex-col shadow-2xl border border-white/20">
+              <div className="p-8 border-b border-gray-50 flex justify-between items-center bg-white sticky top-0 z-10">
+                <div className="flex items-center gap-3">
+                  <div className="bg-orange-500 p-2 rounded-xl text-white"><MapPin className="w-5 h-5" /></div>
+                  <h3 className="text-xl font-black text-gray-900 tracking-tight">{editingRestaurant.id ? '编辑餐厅' : '记录餐厅'}</h3>
+                </div>
+                <button onClick={() => setIsRestaurantModalOpen(false)} className="p-2 bg-gray-50 rounded-full hover:bg-rose-50 hover:text-rose-500 transition-colors"><X className="w-5 h-5" /></button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
+                <div className="space-y-8">
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="col-span-2">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">餐厅图片</label>
+                      <div 
+                        className="w-full h-40 bg-gray-50 border-2 border-dashed border-gray-200 rounded-[2rem] flex flex-col items-center justify-center cursor-pointer overflow-hidden group hover:border-orange-300 transition-all"
+                        onClick={() => {
+                          const input = document.createElement('input');
+                          input.type = 'file';
+                          input.accept = 'image/*';
+                          input.onchange = (e: any) => {
+                            const file = e.target.files[0];
+                            if (file) {
+                              const reader = new FileReader();
+                              reader.onload = (re) => {
+                                setEditingRestaurant(prev => ({ ...prev, imageUrl: re.target?.result as string }));
+                              };
+                              reader.readAsDataURL(file);
+                            }
+                          };
+                          input.click();
+                        }}
+                      >
+                        {editingRestaurant.imageUrl ? (
+                          <img src={editingRestaurant.imageUrl} className="w-full h-full object-cover" />
+                        ) : (
+                          <>
+                            <ImageIcon className="w-8 h-8 text-gray-300 group-hover:text-orange-400 transition-colors" />
+                            <span className="text-[10px] font-black text-gray-400 mt-2">点击上传餐厅门面或环境图</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">餐厅名称</label>
+                      <input 
+                        type="text" 
+                        value={editingRestaurant.name || ''} 
+                        onChange={e => setEditingRestaurant(prev => ({ ...prev, name: e.target.value }))}
+                        className="w-full bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                        placeholder="例如：老王私房菜"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">所在地</label>
+                      <input 
+                        type="text" 
+                        value={editingRestaurant.location || ''} 
+                        onChange={e => setEditingRestaurant(prev => ({ ...prev, location: e.target.value }))}
+                        className="w-full bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                        placeholder="例如：南昌、上海"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">菜系</label>
+                      <input 
+                        type="text" 
+                        value={editingRestaurant.cuisine || ''} 
+                        onChange={e => setEditingRestaurant(prev => ({ ...prev, cuisine: e.target.value }))}
+                        className="w-full bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                        placeholder="例如：川菜、日料"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">人均消费 (元)</label>
+                      <input 
+                        type="number" 
+                        value={editingRestaurant.avgPrice || ''} 
+                        onChange={e => setEditingRestaurant(prev => ({ ...prev, avgPrice: Number(e.target.value) }))}
+                        className="w-full bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                        placeholder="例如：80"
+                      />
+                    </div>
+                  </div>
+
+                  {editingRestaurant.status === 'want_to_go' && (
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">想吃的菜</label>
+                        <button 
+                          onClick={() => setEditingRestaurant(prev => ({ ...prev, dishesToTry: [...(prev!.dishesToTry || []), { name: '' }] }))}
+                          className="text-orange-500 text-[10px] font-black uppercase flex items-center gap-1 bg-orange-50 px-3 py-1.5 rounded-full"
+                        >
+                          <Plus className="w-3 h-3" /> 添加
+                        </button>
+                      </div>
+                      <div className="space-y-4">
+                        {editingRestaurant.dishesToTry?.map((dish, i) => (
+                          <div key={i} className="flex gap-3 items-center bg-gray-50/50 p-3 rounded-2xl border border-gray-100">
+                            <div 
+                              className="w-12 h-12 bg-white border border-dashed border-gray-300 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden flex-shrink-0"
+                              onClick={() => {
+                                const input = document.createElement('input');
+                                input.type = 'file';
+                                input.accept = 'image/*';
+                                input.onchange = (e: any) => {
+                                  const file = e.target.files[0];
+                                  if (file) {
+                                    const reader = new FileReader();
+                                    reader.onload = (re) => {
+                                      const newDishes = [...(editingRestaurant.dishesToTry || [])];
+                                      newDishes[i].imageUrl = re.target?.result as string;
+                                      setEditingRestaurant(prev => ({ ...prev, dishesToTry: newDishes }));
+                                    };
+                                    reader.readAsDataURL(file);
+                                  }
+                                };
+                                input.click();
+                              }}
+                            >
+                              {dish.imageUrl ? (
+                                <img src={dish.imageUrl} className="w-full h-full object-cover" />
+                              ) : (
+                                <Camera className="w-5 h-5 text-gray-300" />
+                              )}
+                            </div>
+                            <input 
+                              type="text" 
+                              placeholder="菜名" 
+                              value={dish.name} 
+                              onChange={e => {
+                                const newDishes = [...(editingRestaurant.dishesToTry || [])];
+                                newDishes[i].name = e.target.value;
+                                setEditingRestaurant(prev => ({ ...prev, dishesToTry: newDishes }));
+                              }}
+                              className="flex-1 bg-white border border-gray-100 rounded-xl px-4 py-2.5 text-sm font-bold"
+                            />
+                            <button 
+                              onClick={() => {
+                                const newDishes = editingRestaurant.dishesToTry?.filter((_, idx) => idx !== i);
+                                setEditingRestaurant(prev => ({ ...prev, dishesToTry: newDishes }));
+                              }}
+                              className="text-gray-300 hover:text-rose-500 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {editingRestaurant.status === 'visited' && (
+                    <>
+                      <div>
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">总体评分</label>
+                        <div className="flex gap-2">
+                          {[1, 2, 3, 4, 5].map(star => (
+                            <button 
+                              key={star}
+                              onClick={() => setEditingRestaurant(prev => ({ ...prev, overallRating: star }))}
+                              className={`p-2 rounded-xl transition-all ${editingRestaurant.overallRating && editingRestaurant.overallRating >= star ? 'bg-orange-500 text-white shadow-lg' : 'bg-gray-50 text-gray-300'}`}
+                            >
+                              <Star className={`w-6 h-6 ${editingRestaurant.overallRating && editingRestaurant.overallRating >= star ? 'fill-current' : ''}`} />
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest">菜品评价</label>
+                          <button 
+                            onClick={() => setEditingRestaurant(prev => ({ ...prev, dishRatings: [...(prev!.dishRatings || []), { name: '', rating: 5, comment: '' }] }))}
+                            className="text-orange-500 text-[10px] font-black uppercase flex items-center gap-1 bg-orange-50 px-3 py-1.5 rounded-full"
+                          >
+                            <Plus className="w-3 h-3" /> 添加评价
+                          </button>
+                        </div>
+                        <div className="space-y-6">
+                          {editingRestaurant.dishRatings?.map((dish, i) => (
+                            <div key={i} className="bg-gray-50/50 p-4 rounded-2xl border border-gray-100 space-y-4 relative">
+                              <button 
+                                onClick={() => {
+                                  const newDishes = editingRestaurant.dishRatings?.filter((_, idx) => idx !== i);
+                                  setEditingRestaurant(prev => ({ ...prev, dishRatings: newDishes }));
+                                }}
+                                className="absolute top-4 right-4 text-gray-300 hover:text-rose-500 transition-colors"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                              
+                              <div className="flex gap-3 items-center">
+                                <div 
+                                  className="w-12 h-12 bg-white border border-dashed border-gray-300 rounded-xl flex items-center justify-center cursor-pointer overflow-hidden"
+                                  onClick={() => {
+                                    const input = document.createElement('input');
+                                    input.type = 'file';
+                                    input.accept = 'image/*';
+                                    input.onchange = (e: any) => {
+                                      const file = e.target.files[0];
+                                      if (file) {
+                                        const reader = new FileReader();
+                                        reader.onload = (re) => {
+                                          const newDishes = [...(editingRestaurant.dishRatings || [])];
+                                          newDishes[i].imageUrl = re.target?.result as string;
+                                          setEditingRestaurant(prev => ({ ...prev, dishRatings: newDishes }));
+                                        };
+                                        reader.readAsDataURL(file);
+                                      }
+                                    };
+                                    input.click();
+                                  }}
+                                >
+                                  {dish.imageUrl ? (
+                                    <img src={dish.imageUrl} className="w-full h-full object-cover" />
+                                  ) : (
+                                    <Camera className="w-5 h-5 text-gray-300" />
+                                  )}
+                                </div>
+                                <input 
+                                  type="text" 
+                                  placeholder="菜名" 
+                                  value={dish.name} 
+                                  onChange={e => {
+                                    const newDishes = [...(editingRestaurant.dishRatings || [])];
+                                    newDishes[i].name = e.target.value;
+                                    setEditingRestaurant(prev => ({ ...prev, dishRatings: newDishes }));
+                                  }}
+                                  className="flex-1 bg-white border border-gray-100 rounded-xl px-4 py-2.5 text-sm font-bold"
+                                />
+                                <div className="flex gap-1">
+                                  {[1, 2, 3, 4, 5].map(s => (
+                                    <button 
+                                      key={s}
+                                      onClick={() => {
+                                        const newDishes = [...(editingRestaurant.dishRatings || [])];
+                                        newDishes[i].rating = s;
+                                        setEditingRestaurant(prev => ({ ...prev, dishRatings: newDishes }));
+                                      }}
+                                    >
+                                      <Star className={`w-3.5 h-3.5 ${dish.rating >= s ? 'text-yellow-400 fill-current' : 'text-gray-200'}`} />
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <textarea 
+                                placeholder="味道如何？" 
+                                value={dish.comment} 
+                                onChange={e => {
+                                  const newDishes = [...(editingRestaurant.dishRatings || [])];
+                                  newDishes[i].comment = e.target.value;
+                                  setEditingRestaurant(prev => ({ ...prev, dishRatings: newDishes }));
+                                }}
+                                className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-xs font-medium h-20 resize-none"
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  <div>
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">备注</label>
+                    <textarea 
+                      value={editingRestaurant.notes || ''} 
+                      onChange={e => setEditingRestaurant(prev => ({ ...prev, notes: e.target.value }))}
+                      className="w-full bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-orange-500/20 h-24 resize-none"
+                      placeholder="写点什么吧..."
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-8 border-t border-gray-50 bg-white">
+                <button 
+                  onClick={() => {
+                    if (!editingRestaurant.name) {
+                      alert('请输入餐厅名称');
+                      return;
+                    }
+                    const finalRes: Restaurant = {
+                      ...editingRestaurant as Restaurant,
+                      id: editingRestaurant.id || Date.now().toString()
+                    };
+                    
+                    setState(prev => {
+                      const exists = prev.restaurants.some(r => r.id === finalRes.id);
+                      if (exists) {
+                        return { ...prev, restaurants: prev.restaurants.map(r => r.id === finalRes.id ? finalRes : r) };
+                      }
+                      return { ...prev, restaurants: [finalRes, ...prev.restaurants] };
+                    });
+                    
+                    setIsRestaurantModalOpen(false);
+                    setEditingRestaurant(null);
+                  }}
+                  className="w-full bg-gray-900 text-white py-5 rounded-full font-black text-lg shadow-2xl shadow-gray-200 active:scale-95 hover:bg-orange-600 transition-all"
+                >
+                  保存记录
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
         {state.isRecipeModalOpen && state.recommendation?.recipe && (
           <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setState(prev => ({ ...prev, isRecipeModalOpen: false }))} className="absolute inset-0 bg-black/80 backdrop-blur-md" />

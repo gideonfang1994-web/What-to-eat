@@ -1,0 +1,7 @@
+{
+  "name": "FoodieRoulette - 今天吃什么",
+  "description": "一个优雅的AI驱动美食决策助手，通过多维度偏好分析，为您生成今日最佳美食方案与精美视觉呈现。支持拍照识别生成私人菜谱。",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

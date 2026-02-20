@@ -180,6 +180,7 @@ const App: React.FC = () => {
   });
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [manualRecipeImage, setManualRecipeImage] = useState<string | null>(null);
   const [isFullMenuShareModalOpen, setIsFullMenuShareModalOpen] = useState(false);
   const [orders, setOrders] = useState<any[]>([]);
   const [isGuest, setIsGuest] = useState(false);
@@ -207,30 +208,42 @@ const App: React.FC = () => {
       setTargetChefId(guestChefId);
       // Fetch the chef's menu
       fetch(`/api/menu/${guestChefId}`)
-        .then(res => res.json())
+        .then(res => {
+          if (!res.ok) throw new Error('Menu not found');
+          return res.json();
+        })
         .then(data => {
           if (data.savedRecipes) {
             setState(prev => ({ ...prev, savedRecipes: data.savedRecipes, activeTab: 'menu' }));
           }
-        });
+        })
+        .catch(err => console.error('Error fetching menu:', err));
     }
 
     // Socket setup
-    socketRef.current = io();
-    
-    if (guestChefId && guestChefId !== chefId) {
-      // Guest doesn't need to register as chef
-    } else {
-      socketRef.current.emit('register-chef', chefId);
-    }
-
-    socketRef.current.on('new-order', (order) => {
-      setOrders(prev => [order, ...prev]);
-      // Show a simple browser notification if possible
-      if (Notification.permission === 'granted') {
-        new Notification('新订单！', { body: `有人下单了：${order.name}` });
+    try {
+      socketRef.current = io();
+      
+      if (guestChefId && guestChefId !== chefId) {
+        // Guest doesn't need to register as chef
+      } else {
+        socketRef.current.emit('register-chef', chefId);
       }
-    });
+
+      socketRef.current.on('new-order', (order) => {
+        setOrders(prev => [order, ...prev]);
+        // Show a simple browser notification if possible
+        if (Notification.permission === 'granted') {
+          new Notification('新订单！', { body: `有人下单了：${order.name}` });
+        }
+      });
+
+      socketRef.current.on('connect_error', () => {
+        console.warn('Socket connection failed. Real-time features may be unavailable.');
+      });
+    } catch (e) {
+      console.error('Socket initialization failed:', e);
+    }
 
     return () => {
       socketRef.current?.disconnect();
@@ -244,7 +257,7 @@ const App: React.FC = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ savedRecipes: state.savedRecipes })
-      });
+      }).catch(err => console.error('Error saving menu:', err));
     }
   }, [state.savedRecipes, chefId, isGuest]);
   const [newRecipe, setNewRecipe] = useState<Partial<Recommendation>>({
@@ -1107,7 +1120,45 @@ const App: React.FC = () => {
               
               <div className="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
                 {/* Basic Info */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-6">
+                  <div className="flex flex-col items-center gap-4">
+                    <div 
+                      onClick={() => document.getElementById('manual-image-upload')?.click()}
+                      className="w-full h-48 bg-gray-50 border-2 border-dashed border-gray-200 rounded-[2rem] flex flex-col items-center justify-center cursor-pointer hover:bg-orange-50 hover:border-orange-200 transition-all overflow-hidden relative group"
+                    >
+                      {manualRecipeImage ? (
+                        <>
+                          <img src={manualRecipeImage} className="w-full h-full object-cover" />
+                          <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                            <Camera className="w-8 h-8 text-white" />
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <Camera className="w-10 h-10 text-gray-300 mb-2" />
+                          <span className="text-xs font-black text-gray-400 uppercase tracking-widest">上传菜品图片</span>
+                        </>
+                      )}
+                    </div>
+                    <input 
+                      id="manual-image-upload"
+                      type="file" 
+                      accept="image/*" 
+                      className="hidden" 
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onloadend = () => {
+                            setManualRecipeImage(reader.result as string);
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
                   <div className="col-span-2">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2 block">菜品名称</label>
                     <input 
@@ -1162,6 +1213,7 @@ const App: React.FC = () => {
                     className="w-full bg-gray-50 border border-gray-100 rounded-2xl px-5 py-4 font-bold text-gray-800 focus:outline-none focus:ring-2 focus:ring-orange-500/20 h-24 resize-none"
                     placeholder="这道菜有什么特别之处？"
                   />
+                  </div>
                 </div>
 
                 {/* Ingredients */}
@@ -1272,11 +1324,12 @@ const App: React.FC = () => {
                       id: Date.now().toString(),
                       tags: newRecipe.tags || ['手动添加'],
                       reason: '这是您亲手录入的美味',
-                      imageUrl: `https://picsum.photos/seed/${newRecipe.name}/800/600`,
+                      imageUrl: manualRecipeImage || `https://picsum.photos/seed/${newRecipe.name}/800/600`,
                       funFact: newRecipe.funFact || '这道菜承载着您的独家记忆。'
                     };
                     setState(prev => ({ ...prev, savedRecipes: [finalRecipe, ...prev.savedRecipes] }));
                     setIsAddModalOpen(false);
+                    setManualRecipeImage(null);
                     setNewRecipe({
                       name: '',
                       category: Category.MEAT,

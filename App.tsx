@@ -504,6 +504,103 @@ const App: React.FC = () => {
 
   const isCurrentSaved = state.recommendation ? state.savedRecipes.some(r => r.id === state.recommendation?.id) : false;
 
+  const renderRestaurantCard = (res: Restaurant, i: number) => (
+    <motion.div 
+      key={res.id}
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: i * 0.05 }}
+      className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-orange-100/50 shadow-sm hover:shadow-md transition-all group relative overflow-hidden"
+    >
+      <div className="flex gap-4">
+        <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
+          <img src={res.imageUrl || `https://picsum.photos/seed/${res.name}/200/200`} className="w-full h-full object-cover" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex justify-between items-start">
+            <div>
+              <h4 className="font-serif-menu text-lg font-bold text-stone-800 truncate">{res.name}</h4>
+              <div className="flex items-center gap-2">
+                <p className="text-[9px] font-black text-stone-400 uppercase tracking-widest">{res.cuisine}</p>
+                <span className="text-[8px] text-stone-300">•</span>
+                <p className="text-[9px] font-black text-orange-400 uppercase tracking-widest">{res.location}</p>
+                <span className="text-[8px] text-stone-300">•</span>
+                <p className="text-[9px] font-black text-stone-500 uppercase tracking-widest">¥{res.avgPrice}/人</p>
+              </div>
+            </div>
+            <div className="flex gap-1">
+              <button 
+                onClick={() => {
+                  setEditingRestaurant(res);
+                  setIsRestaurantModalOpen(true);
+                }}
+                className="p-1.5 text-stone-300 hover:text-orange-500 transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+              <button 
+                onClick={() => setState(prev => ({ ...prev, restaurants: prev.restaurants.filter(r => r.id !== res.id) }))}
+                className="p-1.5 text-stone-300 hover:text-rose-500 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {res.status === 'visited' && (
+            <div className="mt-3 space-y-3">
+              <div className="flex items-center gap-1">
+                {[...Array(5)].map((_, i) => (
+                  <Star key={i} className={`w-3 h-3 ${i < (res.overallRating || 0) ? 'text-yellow-400 fill-current' : 'text-stone-200'}`} />
+                ))}
+                <span className="text-[10px] font-black text-stone-400 ml-1">{res.overallRating}/5</span>
+              </div>
+              {res.dishRatings && res.dishRatings.length > 0 && (
+                <div className="space-y-2">
+                  {res.dishRatings.map((dish, di) => (
+                    <div key={di} className="bg-orange-50/50 p-2 rounded-xl border border-orange-100/30 flex gap-2 items-start">
+                      {dish.imageUrl && (
+                        <img src={dish.imageUrl} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-stone-800">{dish.name}</span>
+                          <div className="flex gap-0.5">
+                            {[...Array(5)].map((_, si) => (
+                              <Star key={si} className={`w-2 h-2 ${si < dish.rating ? 'text-yellow-400 fill-current' : 'text-stone-200'}`} />
+                            ))}
+                          </div>
+                        </div>
+                        {dish.comment && (
+                          <p className="text-[9px] text-stone-500 italic line-clamp-1">{dish.comment}</p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+          {res.status === 'want_to_go' && (
+            <div className="mt-3 space-y-2">
+              <span className="bg-stone-100 text-stone-500 text-[8px] font-black uppercase px-2 py-0.5 rounded-full tracking-widest">想去清单</span>
+              {res.dishesToTry && res.dishesToTry.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {res.dishesToTry.map((dish, di) => (
+                    <div key={di} className="flex items-center gap-1.5 bg-orange-50 px-2 py-1 rounded-lg border border-orange-100/50">
+                      {dish.imageUrl && <img src={dish.imageUrl} className="w-4 h-4 rounded-sm object-cover" />}
+                      <span className="text-[9px] font-bold text-orange-600">想吃: {dish.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </motion.div>
+  );
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 to-rose-50 flex flex-col items-center">
       {/* Dynamic Header */}
@@ -1125,7 +1222,7 @@ const App: React.FC = () => {
                   <div className="absolute top-0 left-0 w-64 h-64 bg-orange-200/10 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2 pointer-events-none"></div>
                   <div className="absolute bottom-0 right-0 w-96 h-96 bg-rose-200/10 rounded-full blur-3xl translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
                   
-                  <div className="relative z-10 space-y-6">
+                  <div className="relative z-10 space-y-8">
                     {/* Stats */}
                     <div className="grid grid-cols-2 gap-3">
                       <div className="bg-white/60 backdrop-blur-sm p-4 rounded-2xl border border-orange-100/50 flex flex-col items-center justify-center text-center shadow-sm">
@@ -1146,103 +1243,34 @@ const App: React.FC = () => {
                         <p className="text-stone-300 font-serif-menu italic">还没有记录任何餐厅...</p>
                       </div>
                     ) : (
-                      <div className="space-y-4">
-                        {state.restaurants.map((res, i) => (
-                          <motion.div 
-                            key={res.id}
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ delay: i * 0.05 }}
-                            className="bg-white/80 backdrop-blur-sm rounded-2xl p-4 border border-orange-100/50 shadow-sm hover:shadow-md transition-all group relative overflow-hidden"
-                          >
-                            <div className="flex gap-4">
-                              <div className="w-16 h-16 rounded-xl overflow-hidden bg-gray-100 flex-shrink-0">
-                                <img src={res.imageUrl || `https://picsum.photos/seed/${res.name}/200/200`} className="w-full h-full object-cover" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex justify-between items-start">
-                                  <div>
-                                    <h4 className="font-serif-menu text-lg font-bold text-stone-800 truncate">{res.name}</h4>
-                                    <div className="flex items-center gap-2">
-                                      <p className="text-[9px] font-black text-stone-400 uppercase tracking-widest">{res.cuisine}</p>
-                                      <span className="text-[8px] text-stone-300">•</span>
-                                      <p className="text-[9px] font-black text-orange-400 uppercase tracking-widest">{res.location}</p>
-                                      <span className="text-[8px] text-stone-300">•</span>
-                                      <p className="text-[9px] font-black text-stone-500 uppercase tracking-widest">¥{res.avgPrice}/人</p>
-                                    </div>
-                                  </div>
-                                  <div className="flex gap-1">
-                                    <button 
-                                      onClick={() => {
-                                        setEditingRestaurant(res);
-                                        setIsRestaurantModalOpen(true);
-                                      }}
-                                      className="p-1.5 text-stone-300 hover:text-orange-500 transition-colors"
-                                    >
-                                      <Plus className="w-3.5 h-3.5" />
-                                    </button>
-                                    <button 
-                                      onClick={() => setState(prev => ({ ...prev, restaurants: prev.restaurants.filter(r => r.id !== res.id) }))}
-                                      className="p-1.5 text-stone-300 hover:text-rose-500 transition-colors"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </div>
-
-                                {res.status === 'visited' && (
-                                  <div className="mt-3 space-y-3">
-                                    <div className="flex items-center gap-1">
-                                      {[...Array(5)].map((_, i) => (
-                                        <Star key={i} className={`w-3 h-3 ${i < (res.overallRating || 0) ? 'text-yellow-400 fill-current' : 'text-stone-200'}`} />
-                                      ))}
-                                      <span className="text-[10px] font-black text-stone-400 ml-1">{res.overallRating}/5</span>
-                                    </div>
-                                    {res.dishRatings && res.dishRatings.length > 0 && (
-                                      <div className="space-y-2">
-                                        {res.dishRatings.map((dish, di) => (
-                                          <div key={di} className="bg-orange-50/50 p-2 rounded-xl border border-orange-100/30 flex gap-2 items-start">
-                                            {dish.imageUrl && (
-                                              <img src={dish.imageUrl} className="w-10 h-10 rounded-lg object-cover flex-shrink-0" />
-                                            )}
-                                            <div className="flex-1 min-w-0">
-                                              <div className="flex justify-between items-center">
-                                                <span className="text-[10px] font-bold text-stone-800">{dish.name}</span>
-                                                <div className="flex gap-0.5">
-                                                  {[...Array(5)].map((_, si) => (
-                                                    <Star key={si} className={`w-2 h-2 ${si < dish.rating ? 'text-yellow-400 fill-current' : 'text-stone-200'}`} />
-                                                  ))}
-                                                </div>
-                                              </div>
-                                              {dish.comment && (
-                                                <p className="text-[9px] text-stone-500 italic line-clamp-1">{dish.comment}</p>
-                                              )}
-                                            </div>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                                {res.status === 'want_to_go' && (
-                                  <div className="mt-3 space-y-2">
-                                    <span className="bg-stone-100 text-stone-500 text-[8px] font-black uppercase px-2 py-0.5 rounded-full tracking-widest">想去清单</span>
-                                    {res.dishesToTry && res.dishesToTry.length > 0 && (
-                                      <div className="flex flex-wrap gap-2">
-                                        {res.dishesToTry.map((dish, di) => (
-                                          <div key={di} className="flex items-center gap-1.5 bg-orange-50 px-2 py-1 rounded-lg border border-orange-100/50">
-                                            {dish.imageUrl && <img src={dish.imageUrl} className="w-4 h-4 rounded-sm object-cover" />}
-                                            <span className="text-[9px] font-bold text-orange-600">想吃: {dish.name}</span>
-                                          </div>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
+                      <div className="space-y-10">
+                        {/* Want to go section */}
+                        {state.restaurants.filter(r => r.status === 'want_to_go').length > 0 && (
+                          <div className="space-y-4">
+                            <div className="flex items-center gap-2 px-2">
+                              <Bookmark className="w-4 h-4 text-orange-500" />
+                              <h3 className="text-sm font-black text-stone-800 uppercase tracking-widest">想去清单</h3>
+                              <div className="h-[1px] flex-1 bg-orange-100"></div>
                             </div>
-                          </motion.div>
-                        ))}
+                            <div className="space-y-4">
+                              {state.restaurants.filter(r => r.status === 'want_to_go').map((res, i) => renderRestaurantCard(res, i))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Visited section */}
+                        {state.restaurants.filter(r => r.status === 'visited').length > 0 && (
+                          <div className="space-y-4">
+                            <div className="flex items-center gap-2 px-2">
+                              <CheckCircle2 className="w-4 h-4 text-orange-500" />
+                              <h3 className="text-sm font-black text-stone-800 uppercase tracking-widest">去过足迹</h3>
+                              <div className="h-[1px] flex-1 bg-orange-100"></div>
+                            </div>
+                            <div className="space-y-4">
+                              {state.restaurants.filter(r => r.status === 'visited').map((res, i) => renderRestaurantCard(res, i))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

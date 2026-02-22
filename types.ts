@@ -97,6 +97,8 @@ export interface Restaurant {
   name: string;
   cuisine: string;
   location: string;
+  address?: string;
+  distance?: number;
   avgPrice: number;
   status: 'want_to_go' | 'visited';
   overallRating?: number;
@@ -104,6 +106,8 @@ export interface Restaurant {
   dishesToTry?: DishToTry[];
   notes?: string;
   imageUrl?: string;
+  visitCount?: number;
+  visitHistory?: string[]; // ISO strings
 }
 
 export type TabType = 'recommend' | 'menu' | 'restaurants';

@@ -61,6 +61,7 @@ async function startServer() {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
+      root: __dirname,
     });
     app.use(vite.middlewares);
   } else {

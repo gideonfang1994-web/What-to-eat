@@ -2,7 +2,18 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { UserPreferences, Recommendation, Recipe, Category, Restaurant } from "./types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+let aiInstance: GoogleGenAI | null = null;
+
+const getAI = () => {
+  if (!aiInstance) {
+    const apiKey = process.env.API_KEY;
+    if (!apiKey) {
+      console.warn("GEMINI_API_KEY is missing. AI features will not work.");
+    }
+    aiInstance = new GoogleGenAI({ apiKey: apiKey || 'dummy-key' });
+  }
+  return aiInstance;
+};
 
 /**
  * 让 AI 从用户的“私人菜单”中根据当前偏好挑选最合适的一道菜。
@@ -10,6 +21,7 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 // Fix: Updated return type from Promise<string> to Promise<{ selectedId: string; reason: string }>
 // to resolve the destructuring error in App.tsx (line 102).
 export const selectRecipeFromPool = async (prefs: UserPreferences, pool: Recommendation[]): Promise<{ selectedId: string; reason: string }> => {
+  const ai = getAI();
   const poolData = pool.map(r => ({ id: r.id, name: r.name, tags: r.tags, description: r.description }));
   
   const prompt = `你是一个美食管家。请从以下用户的私人菜谱库中，根据用户当下的偏好，挑选出最合适的一道菜。
@@ -48,6 +60,7 @@ export const selectRecipeFromPool = async (prefs: UserPreferences, pool: Recomme
  * 让 AI 从用户的“餐馆列表”中根据当前偏好挑选最合适的一家店。
  */
 export const selectRestaurantFromPool = async (prefs: UserPreferences, pool: Restaurant[]): Promise<{ selectedId: string; reason: string }> => {
+  const ai = getAI();
   const poolData = pool.map(r => ({ 
     id: r.id, 
     name: r.name, 
@@ -92,6 +105,7 @@ export const selectRestaurantFromPool = async (prefs: UserPreferences, pool: Res
 };
 
 export const getFoodRecommendation = async (prefs: UserPreferences): Promise<Recommendation> => {
+  const ai = getAI();
   const prompt = `Based on these preferences:
   Mood: ${prefs.mood}
   Budget: ${prefs.budget}
@@ -135,6 +149,7 @@ export const getFoodRecommendation = async (prefs: UserPreferences): Promise<Rec
 };
 
 export const getDetailedRecipe = async (dishName: string): Promise<Recipe> => {
+  const ai = getAI();
   const prompt = `Provide a detailed recipe for "${dishName}" in Chinese. 
   Include a list of ingredients with amounts, step-by-step cooking instructions, and some pro tips.`;
 
@@ -175,6 +190,7 @@ export const getDetailedRecipe = async (dishName: string): Promise<Recipe> => {
 };
 
 export const analyzeDishImage = async (base64Data: string, mimeType: string): Promise<Recommendation> => {
+  const ai = getAI();
   const prompt = `Analyze this food image. Identify the dish and provide a detailed Chinese recipe for it. 
   Return the name, a short description, ingredients with amounts, steps, tips, tags, estimated calories, and a fun fact.`;
 
@@ -243,6 +259,7 @@ export const analyzeDishImage = async (base64Data: string, mimeType: string): Pr
 };
 
 export const generateFoodImage = async (dishName: string): Promise<string> => {
+  const ai = getAI();
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: {
